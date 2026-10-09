@@ -1,0 +1,223 @@
+
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Neon Survivor: Bosses</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#080b18;color:white;font:16px Arial;text-align:center}
+header{padding:12px;background:#11162b;border-bottom:1px solid #394168}
+h1{color:#69f5ff;margin:8px;font-size:clamp(22px,4vw,36px)}
+#stats{display:flex;justify-content:center;gap:16px;flex-wrap:wrap;padding:10px}
+canvas{display:block;width:min(96vw,900px);height:auto;margin:auto;border:2px solid #49557c;border-radius:10px;background:#10172a}
+button,select{background:#222c4d;color:white;border:1px solid #7186c9;padding:10px 14px;border-radius:9px;margin:4px;cursor:pointer}
+button:hover{background:#394a79}
+#panel{max-width:900px;margin:10px auto;padding:10px}
+#overlay{position:fixed;inset:0;background:#050716eF;display:flex;align-items:center;justify-content:center;z-index:5;padding:16px}
+#box{background:#151c36;border:2px solid #6b7cfb;border-radius:18px;padding:22px;max-width:680px;width:100%;max-height:90vh;overflow:auto}
+.choices{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:8px}
+.pick{min-height:105px;text-align:left;white-space:normal}
+.common{border-color:#9da7b9}.uncommon{border-color:#5cdb83}.rare{border-color:#56cfff}.epic{border-color:#bd72ff}.legendary{border-color:#ffd34f;box-shadow:inset 0 0 10px #ffc83d55}
+small{color:#b9c4e8}
+</style>
+</head>
+<body>
+<header><h1>⚡ NEON SURVIVOR: BOSSES ⚡</h1>
+<div>Виживай • Збирай досвід • Знищуй босів</div></header>
+<div id="stats">
+<span id="hp">❤️ HP: 100/100</span><span id="lv">⭐ Рівень: 1</span>
+<span id="xp">💎 Досвід: 0/12</span><span id="kills">☠️ Вбивства: 0</span>
+<span id="time">⏱️ 0:00</span>
+</div>
+<canvas id="game" width="900" height="560"></canvas>
+<div id="panel">
+<div>Карта: <select id="map"></select> <button id="start">▶ Нова гра</button> <button id="pause">Ⅱ Пауза</button></div>
+<p><small>Рух: WASD або стрілки. Стріляєш автоматично в найближчого ворога. На телефоні можна використовувати кнопки нижче.</small></p>
+<div>
+<button onclick="mobileMove(0,-1)">⬆️</button><br>
+<button onclick="mobileMove(-1,0)">⬅️</button>
+<button onclick="mobileMove(0,0)">🛑</button>
+<button onclick="mobileMove(1,0)">➡️</button><br>
+<button onclick="mobileMove(0,1)">⬇️</button>
+</div>
+<div id="upgrades"></div>
+</div>
+<div id="overlay"><div id="box">
+<h2>🌌 Neon Survivor</h2>
+<p>Обери карту, виживай серед ворогів і готуйся до босів!</p>
+<p>Кожні 5 рівнів з'являється бос. Підбирай кристали досвіду й обирай покращення.</p>
+<div class="choices" id="mapcards"></div>
+<p><button onclick="begin()">ПОЧАТИ ГРУ</button></p>
+</div></div>
+<script>
+const c=document.getElementById('game'),ctx=c.getContext('2d');
+const $=id=>document.getElementById(id);
+const maps=[
+{name:'🌲 Смарагдовий ліс',bg:'#102b26',ground:'#173b32',accent:'#55ffb2'},
+{name:'🏜️ Піщана пустеля',bg:'#3a291d',ground:'#4b3524',accent:'#ffd16d'},
+{name:'❄️ Крижаний край',bg:'#152b42',ground:'#1b3854',accent:'#8de7ff'},
+{name:'🌋 Вулкан',bg:'#32171b',ground:'#4b2023',accent:'#ff6a42'},
+{name:'⚰️ Цвинтар',bg:'#201c31',ground:'#2d2840',accent:'#b5a1ff'},
+{name:'🚀 Космос',bg:'#090d28',ground:'#13183b',accent:'#72a0ff'},
+{name:'🕳️ Підземелля',bg:'#24252a',ground:'#30343d',accent:'#f4e0a1'},
+{name:'🔥 Пекло',bg:'#340d20',ground:'#501329',accent:'#ff4380'}
+];
+maps.forEach((m,i)=>{$('map').add(new Option(m.name,i));$('mapcards').innerHTML+=`<button onclick="chooseMap(${i})">${m.name}<br><small>Арена ${i+1}</small></button>`});
+let mapIndex=0,player,enemies=[],bullets=[],enemyShots=[],gems=[],particles=[];
+let level=1,xp=0,nextXP=12,kills=0,elapsed=0,frame=0,running=false,paused=false,dead=false;
+let keys={},mobile={x:0,y:0},last=performance.now(),bossNumber=0;
+const rarity=[
+{name:'Звичайне',cls:'common',weight:48,mul:1},
+{name:'Незвичайне',cls:'uncommon',weight:27,mul:1.3},
+{name:'Рідкісне',cls:'rare',weight:15,mul:1.7},
+{name:'Епічне',cls:'epic',weight:7,mul:2.3},
+{name:'ЛЕГЕНДАРНЕ',cls:'legendary',weight:3,mul:3}
+];
+const powers=[
+{name:'🔫 Мультипуля',desc:'Додаткова куля за постріл',do:p=>p.bullets=Math.min(9,p.bullets+1)},
+{name:'❤️ Подвійне серце',desc:'Максимальне HP ×2',do:p=>{p.maxHP*=2;p.hp=Math.min(p.maxHP,p.hp+p.maxHP*.5)}},
+{name:'💥 Суперсила',desc:'Збільшує шкоду',do:p=>p.damage*=1.5},
+{name:'⚡ Швидка стрільба',desc:'Стріляєш частіше',do:p=>p.fireRate=Math.max(7,p.fireRate*.78)},
+{name:'👟 Спритність',desc:'Бігаєш швидше',do:p=>p.speed*=1.16},
+{name:'🧲 Магніт',desc:'Кристали притягуються здалеку',do:p=>p.magnet+=65},
+{name:'💚 Лікування',desc:'Відновлює частину HP',do:p=>p.hp=Math.min(p.maxHP,p.hp+p.maxHP*.38)},
+{name:'🔮 Багатий досвід',desc:'Отримуєш у 2 рази більше досвіду',do:p=>p.xpMult*=2},
+{name:'🛡️ Броня',desc:'Зменшує отриману шкоду',do:p=>p.armor=Math.min(.75,p.armor+.12)},
+{name:'🎯 Дальність',desc:'Кулі летять швидше',do:p=>p.bulletSpeed*=1.22},
+{name:'🌀 Критичний удар',desc:'Шанс завдати потрійної шкоди',do:p=>p.crit=Math.min(.75,p.crit+.13)},
+{name:'💣 Вибухові кулі',desc:'Постріли сильніше шкодять ворогам',do:p=>p.damage*=1.3},
+{name:'✨ Досвідчений',desc:'Бонус до здобутого досвіду',do:p=>p.xpMult*=1.45},
+{name:'🌈 Регенерація',desc:'Поступово відновлює здоров’я',do:p=>p.regen+=.035},
+{name:'👻 Фантом',desc:'Коротший час між пошкодженнями',do:p=>p.invuln=Math.min(55,p.invuln+10)}
+];
+function chooseMap(i){mapIndex=i;$('map').value=i;$('overlay').style.display='none';begin()}
+function mobileMove(x,y){mobile={x,y}}
+function reset(){
+player={x:450,y:280,r:12,hp:100,maxHP:100,speed:3,damage:15,fireRate:32,bullets:1,bulletSpeed:6,magnet:65,xpMult:1,armor:0,crit:.08,regen:0,invuln:0,fire:0};
+enemies=[];bullets=[];enemyShots=[];gems=[];particles=[];
+level=1;xp=0;nextXP=12;kills=0;elapsed=0;frame=0;bossNumber=0;dead=false;paused=false;running=true;
+$('pause').textContent='Ⅱ Пауза';$('upgrades').textContent='';last=performance.now();
+}
+function begin(){mapIndex=+$('map').value;reset();$('overlay').style.display='none'}
+$('start').onclick=()=>{reset();$('overlay').style.display='none'};
+$('pause').onclick=()=>{if(!running||dead)return;paused=!paused;$('pause').textContent=paused?'▶ Продовжити':'Ⅱ Пауза'};
+window.onkeydown=e=>{keys[e.key.toLowerCase()]=true;if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key))e.preventDefault()};
+window.onkeyup=e=>keys[e.key.toLowerCase()]=false;
+function spawnEnemy(boss=false){
+let side=Math.random()*4,x=side<1?0:side<2?900:Math.random()*900,y=side<3?side<2?Math.random()*560:0:560;
+let types=[
+{name:'Слизень',color:'#61ff8c',hp:25,spd:1.1,r:13,damage:8},
+{name:'Кажан',color:'#c48aff',hp:18,spd:2,r:10,damage:7},
+{name:'Демон',color:'#ff526f',hp:48,spd:1.3,r:15,damage:12},
+{name:'Робот',color:'#64ddff',hp:65,spd:.8,r:16,damage:13},
+{name:'Привид',color:'#e0e6ff',hp:35,spd:1.6,r:12,damage:9}
+];
+let type=types[Math.floor(Math.random()*types.length)];
+if(boss){
+let names=['КІСТЯНИЙ КОРОЛЬ','ВОЛОДАР СЛИЗУ','ПЕКЕЛЬНИЙ ДЕМОН','МЕХА-ОКО','ПРИМАРНИЙ КОРОЛЬ','ДРАКОН ПЕКЛА','КОСМІЧНИЙ ЖНЕЦЬ','ФІНАЛЬНИЙ КОШМАР'];
+type={name:names[bossNumber%names.length],color:['#fff1ad','#61ff8c','#ff526f','#64ddff','#c7adff','#ff813d','#779bff','#ff45d1'][bossNumber%8],hp:480+bossNumber*170,spd:1.05+bossNumber*.035,r:29,damage:18+bossNumber*2};
+bossNumber++;
+}
+let scale=1+elapsed/95+level*.1;
+enemies.push({x,y,hp:type.hp*scale,maxHP:type.hp*scale,spd:type.spd,boss,r:type.r,color:type.color,name:type.name,damage:type.damage,shot:0});
+}
+function drop(e){
+gems.push({x:e.x,y:e.y,r:e.boss?9:5,value:e.boss?35:3+Math.floor(Math.random()*4),color:e.boss?'#ffd34f':'#6bf7ff'});
+}
+function hurt(d){
+if(player.invuln>0)return;
+player.hp-=d*(1-player.armor);player.invuln=28;
+if(player.hp<=0){player.hp=0;endGame(false)}
+}
+function gain(v){
+xp+=v*player.xpMult;
+while(xp>=nextXP){xp-=nextXP;level++;nextXP=Math.ceil(nextXP*1.38+5);showUpgrade()}
+}
+function showUpgrade(){
+paused=true;$('overlay').style.display='flex';
+let list=[...powers].sort(()=>Math.random()-.5).slice(0,3);
+$('box').innerHTML=`<h2>⭐ Рівень ${level}!</h2><p>Обери покращення</p><div class="choices" id="opts"></div>`;
+list.forEach(power=>{
+let r=rarity[Math.floor(Math.random()*rarity.length)];
+let b=document.createElement('button');b.className='pick '+r.cls;
+b.innerHTML=`<b>${r.name}</b><hr><b>${power.name}</b><br><small>${power.desc}</small>`;
+b.onclick=()=>{power.do(player);$('overlay').style.display='none';paused=false;$('upgrades').textContent='Останнє: '+power.name+' ('+r.name+')'};
+$('opts').appendChild(b)
+})
+}
+function endGame(win){
+dead=true;running=false;paused=true;$('overlay').style.display='flex';
+$('box').innerHTML=`<h2>${win?'🏆 ПЕРЕМОГА!':'💀 Гру завершено'}</h2><p>Рівень: ${level} • Вбивства: ${kills} • Час: ${Math.floor(elapsed)} сек.</p><p>Босів переможено: ${bossNumber}</p><button onclick="begin()">🔄 Грати знову</button>`;
+}
+function update(){
+if(!running||paused||dead)return;
+frame++;elapsed+=1/60;
+if(frame%Math.max(14,55-Math.floor(elapsed/10))===0&&enemies.filter(e=>!e.boss).length<30)spawnEnemy();
+if(frame%1800===0)spawnEnemy(true);
+if(player.regen&&frame%30===0)player.hp=Math.min(player.maxHP,player.hp+player.regen);
+if(player.invuln>0)player.invuln--;
+let dx=(keys.d||keys.arrowright?1:0)-(keys.a||keys.arrowleft?1:0)+mobile.x;
+let dy=(keys.s||keys.arrowdown?1:0)-(keys.w||keys.arrowup?1:0)+mobile.y;
+let mag=Math.hypot(dx,dy)||1;
+player.x=Math.max(player.r,Math.min(900-player.r,player.x+dx/mag*player.speed));
+player.y=Math.max(player.r,Math.min(560-player.r,player.y+dy/mag*player.speed));
+player.fire--;
+let target=enemies.reduce((best,e)=>!best||Math.hypot(e.x-player.x,e.y-player.y)<Math.hypot(best.x-player.x,best.y-player.y)?e:best,null);
+if(target&&player.fire<=0){
+let a=Math.atan2(target.y-player.y,target.x-player.x);
+for(let i=0;i<player.bullets;i++){let spread=(i-(player.bullets-1)/2)*.13;
+bullets.push({x:player.x,y:player.y,vx:Math.cos(a+spread)*player.bulletSpeed,vy:Math.sin(a+spread)*player.bulletSpeed,r:4,damage:player.damage*(Math.random()<player.crit?3:1)})}
+player.fire=player.fireRate
+}
+for(let e of enemies){
+let a=Math.atan2(player.y-e.y,player.x-e.x);
+e.x+=Math.cos(a)*e.spd;e.y+=Math.sin(a)*e.spd;
+if(e.boss&&++e.shot%70===0)enemyShots.push({x:e.x,y:e.y,vx:Math.cos(a)*3.3,vy:Math.sin(a)*3.3,r:7,damage:e.damage});
+if(Math.hypot(e.x-player.x,e.y-player.y)<e.r+player.r)hurt(e.damage*.09);
+}
+for(let b of bullets){b.x+=b.vx;b.y+=b.vy;for(let e of enemies){if(!e.dead&&Math.hypot(e.x-b.x,e.y-b.y)<e.r+b.r){e.hp-=b.damage;b.dead=true;if(e.hp<=0){e.dead=true;kills++;drop(e)}}}}
+bullets=bullets.filter(b=>!b.dead&&b.x>-20&&b.x<920&&b.y>-20&&b.y<580);
+for(let b of enemyShots){b.x+=b.vx;b.y+=b.vy;if(Math.hypot(b.x-player.x,b.y-player.y)<b.r+player.r){hurt(b.damage);b.dead=true}}
+enemyShots=enemyShots.filter(b=>!b.dead&&b.x>-20&&b.x<920&&b.y>-20&&b.y<580);
+enemies=enemies.filter(e=>!e.dead);
+for(let g of gems){
+let d=Math.hypot(g.x-player.x,g.y-player.y);
+if(d<player.magnet){g.x+=(player.x-g.x)*.07;g.y+=(player.y-g.y)*.07}
+if(d<player.r+g.r+3){g.dead=true;gain(g.value)}
+}
+gems=gems.filter(g=>!g.dead);
+$('hp').textContent=`❤️ HP: ${Math.ceil(player.hp)}/${player.maxHP}`;
+$('lv').textContent='⭐ Рівень: '+level;
+$('xp').textContent=`💎 Досвід: ${Math.floor(xp)}/${nextXP}`;
+$('kills').textContent='☠️ Вбивства: '+kills;
+$('time').textContent='⏱️ '+Math.floor(elapsed/60)+':'+String(Math.floor(elapsed%60)).padStart(2,'0');
+}
+function draw(){
+let m=maps[mapIndex];ctx.fillStyle=m.bg;ctx.fillRect(0,0,900,560);
+ctx.strokeStyle=m.ground;ctx.lineWidth=1;
+for(let x=0;x<900;x+=40){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,560);ctx.stroke()}
+for(let y=0;y<560;y+=40){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(900,y);ctx.stroke()}
+for(let i=0;i<38;i++){let x=(i*173+47)%900,y=(i*97+23)%560;ctx.fillStyle=m.accent+'33';ctx.fillRect(x,y,3,3)}
+for(let g of gems){ctx.fillStyle=g.color;ctx.beginPath();ctx.arc(g.x,g.y,g.r,0,7);ctx.fill()}
+for(let b of bullets){ctx.fillStyle='#f9ff88';ctx.beginPath();ctx.arc(b.x,b.y,b.r,0,7);ctx.fill()}
+for(let b of enemyShots){ctx.fillStyle='#ff547d';ctx.beginPath();ctx.arc(b.x,b.y,b.r,0,7);ctx.fill()}
+for(let e of enemies){
+ctx.fillStyle=e.color;ctx.beginPath();ctx.arc(e.x,e.y,e.r,0,7);ctx.fill();
+ctx.fillStyle='#111';ctx.fillRect(e.x-e.r,e.y-e.r-10,e.r*2,4);
+ctx.fillStyle='#ff486e';ctx.fillRect(e.x-e.r,e.y-e.r-10,e.r*2*Math.max(0,e.hp/e.maxHP),4);
+if(e.boss){ctx.fillStyle='white';ctx.font='bold 14px Arial';ctx.textAlign='center';ctx.fillText(e.name,e.x,e.y-e.r-17)}
+}
+if(player){
+ctx.globalAlpha=player.invuln>0&&frame%5<2?.35:1;
+ctx.fillStyle='#ff4f87';ctx.beginPath();ctx.arc(player.x,player.y,player.r,0,7);ctx.fill();
+ctx.fillStyle='white';ctx.font='bold 12px Arial';ctx.textAlign='center';ctx.fillText('♥',player.x,player.y+4);ctx.globalAlpha=1;
+}
+if(!running){ctx.fillStyle='white';ctx.font='22px Arial';ctx.textAlign='center';ctx.fillText('Натисни «Нова гра»',450,275)}
+}
+function loop(now){update();draw();requestAnimationFrame(loop)}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
